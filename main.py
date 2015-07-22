@@ -10,8 +10,6 @@ Based on http://www.roguebasin.com/index.php?title=Complete_Roguelike_Tutorial,_
 """
 
 #TODO: Objects show as holes in the floor
-#TODO: Aggressive AIs get stuck under player
-
 
 import libtcodpy as libtcod
 import math #For rounding UI positions and map building
@@ -60,17 +58,25 @@ MAX_ROOMS = 50 #How many rooms should we try to generate?
 
 ROOM_MAX_MONSTERS = 3
 ROOM_MAX_ITEMS = 3
-MONSTER_SPAWN_CHANCE = 80 #Percent
-ITEM_SPAWN_CHANCE = 30 #Percent
+MONSTER_SPAWN_CHANCE = 80 #Percent; higher = harder
+ITEM_SPAWN_CHANCE = 30 #Percent; lower = harder
+DROP_BUFF_CHANCE = 100 #Percent; can be lowered to vastly increase difficulty
+DROP_HEAL_CHANCE = 10
+DROP_MHP_CHANCE = 10
+DROP_ATK_CHANCE = 25
+DROP_DEF_CHANCE = 25
+DROP_LIGHT_CHANCE = 5
+
 
 MONSTER_TYPES = [
     {"id" : 0, "name" : "Glorp", "description" : "A blob of goo, which Colonials call Glorp. It's a semi-sentient collection of tylium.", "char" : "g", "color" : libtcod.green, "hp" : 10, "atk" : 1, "def" : 1, "speed" : 1, "ai_type": "passive"},
     {"id" : 1, "name" : "Scout", "description" : "A Cylon scout, a small 8-legged creature with a camera onboard.", "char" : "s", "color" : libtcod.light_gray, "hp" : 1, "atk" : 0, "def" : 1, "speed" : 1, "ai_type": "nonsensical"},
-    {"id" : 2, "name" : "Combat Scout", "description" : "A Cylon scout, outfitted for combat.", "char" : "c", "color" : libtcod.gray, "hp" : 10, "atk" : 1, "def" : 1, "speed" : 1, "ai_type": "aggressive"}
+    {"id" : 2, "name" : "Combat Scout", "description" : "A Cylon scout, outfitted for combat.", "char" : "c", "color" : libtcod.gray, 
+"hp" : 2, "atk" : 1, "def" : 1, "speed" : 1, "ai_type": "aggressive"}
 ]
 
 MONSTER_TYPES_NOAUTO = [
-    {"id" : 200, "name" : "Centurion", "description" : "A huge metal Cylon armed with sharp claws. the perfect killing machine.", "char" : "C", "color" : libtcod.darker_red, "hp" : 50, "atk" : 10, "def" : 10, "speed" : 1, "ai_type": "aggressive"},
+    {"id" : 200, "name" : "Centurion", "description" : "A huge metal Cylon armed with sharp claws. The perfect killing machine.", "char" : "C", "color" : libtcod.darker_red, "hp" : 50, "atk" : 10, "def" : 10, "speed" : 1, "ai_type": "aggressive"},
     {"id" : 201, "name" : "Six", "description" : "A beautiful Cylon woman armed with a short vibraknife.", "char" : "6", "color" : libtcod.red, "hp" : 1, "atk" : 3, "def" : 3, "speed" : 1, "ai_type": "aggressive"},
     {"id" : 202, "name" : "Three", "description" : "A short Cylon woman, holding a rather terrifying katana.", "char" : "3", "color" : libtcod.red, "hp" : 30, "atk" : 5, "def" : 3, "speed" : 1, "ai_type": "aggressive"}
 ]
@@ -143,12 +149,15 @@ class World:
         self.spawn_x = 0
         self.spawn_y = 0
         self.countdown = COUNTDOWN_MAX + 1
+        self.donecount = False #Has the countdown finished already?
         self.build_map()
         self.build_fovmap()
 
     def spawn_object(self, obj):
         """Add an object to the world."""
         debug("Adding an object \"" + obj.name + "\" to the world at X:" + str(obj.x) + " Y: " + str(obj.y) + ".")
+        if not obj.world is None: #Spawning makes this false. Here we are checking to make sure that the object does not already exist somewhere, as that would introduce a lot of really weird bugs.
+            debug("We can't spawn an \"" + obj.name + "\", it's already spawned somewhere. Despawn it there first.")
         status, object_hit = self.is_blocked(obj.x, obj.y)
         if status == 1:
             debug("\tWe can't spawn an \"" + obj.name + "\" because it's in the wall.")
@@ -156,12 +165,15 @@ class World:
         elif status == 2:
             debug("\tWe can't spawn an \"" + obj.name + "\" because it's in an\"" + object_hit.name + "\"")
         else:
+            obj.world = self
             self.Objects.append(obj)
             return True
 
     def despawn_object(self, obj):
         """Remove an object from the world."""
-        debug("Removed an object from the world.")
+        if obj.world is None:
+            debug("Despawning an unspawned object \"" + obj.name + "\".")
+        debug("Removed an \"" + obj.name + "\" from the world.")
         self.Objects.remove(obj)
 
     def spawn_player(self, obj):
@@ -203,6 +215,9 @@ class World:
         for obj in self.Objects:
             if obj.blocks and obj.x == x and obj.y == y:
                 return (2, obj)
+        if self.player: #This section would cause a crash if the player didn't exist
+            if  x == self.player.x and y == self.player.y:
+                return (2, self.player)
 
         return (0, None)
 
@@ -325,6 +340,9 @@ class World:
             self.countdown -= 1
         #If the timer is over, spawn enemies in huge quantities
         if self.countdown <= 0:
+            if self.donecount == False: #First time
+                self.donecount = True
+                message("The Cylons have begun jumping in! You are about to be swarmed!", libtcod.red)
             target_is_free = 1
             self.spawn_x = 0
             self.spawn_y = 0
@@ -387,6 +405,7 @@ class GameObject(object):
         self.name = name
         self.visible = False
         self.blocks = True
+        self.world = None
 
     def interact(self, interlocutor):
         message(self.describe(), color_ui_text)
@@ -461,14 +480,15 @@ class GameItem(GameObject):
 
     def interact(self, interlocutor):
         if interlocutor.name == "You":
-            message("You got:" + self.describe(), color_ui_fuel)
+            message("Picked up: " + self.describe(), color_ui_fuel)
             interlocutor.attack += self.buff_atk
             interlocutor.defense += self.buff_def
             interlocutor.heal += self.buff_heal
             interlocutor.torch_radius += self.buff_light
-            interlocutor.fuel += self.fuel
-            interlocutor.hp += self.hp
-            world.despawn_object(self) #TODO: THIS IS A HACK
+            if self.world.player.fuel + self.fuel > self.world.player.max_fuel:
+                interlocutor.fuel += self.fuel
+                interlocutor.hp += self.hp
+            self.world.despawn_object(self)
 
     def describe(self):
         desc = self.description
@@ -503,7 +523,23 @@ class GameNPC(GameObject):
         super(GameNPC, self).update(world)
         if self.hp <= 0:
             message(self.name + " died!")
-            world.despawn_object(self)
+            #Now give the player a buff for killing the enemy, maybe.
+            if libtcod.random_get_int(0, 0, 100) < DROP_BUFF_CHANCE:
+                if libtcod.random_get_int(0,0,100) < DROP_ATK_CHANCE:
+                    self.world.player.attack += 1
+                    message("You feel stronger.", color_ui_charge)
+                if libtcod.random_get_int(0,0,100) < DROP_DEF_CHANCE:
+                    self.world.player.defense += 1
+                    message("You feel sturdier.", color_ui_charge)
+                if libtcod.random_get_int(0,0,100) < DROP_HEAL_CHANCE:
+                    self.world.player.hp = self.world.player.max_hp
+                    message("You feel completely rejuvinated.", color_ui_charge)
+                if libtcod.random_get_int(0,0,100) < DROP_LIGHT_CHANCE:
+                    self.world.player.torch_radius += 1
+                    message("Your flashlight shines a little brighter.", color_ui_charge)
+
+            #Now remove us from whatever world we're in
+            self.world.despawn_object(self)
         if (self.x == player.x and self.y == player.y):
             player.interact(self)
         if self.ai_type == "passive":
@@ -546,8 +582,8 @@ class GameNPC(GameObject):
         if interlocutor.name != "You":
             return #We're not interacting with the player for some reason. This is not good.
         #See if we hit the enemy
-        attacker_hit_try = libtcod.random_get_int(0, 0, 5) + interlocutor.attack
-        defender_dodge_try = libtcod.random_get_int(0, 0, 5) + self.defense
+        attacker_hit_try = libtcod.random_get_int(0, 0, interlocutor.attack) + interlocutor.attack
+        defender_dodge_try = libtcod.random_get_int(0, 0, self.defense) + self.defense
         hit_enemy = False
         damage_enemy = 0
         if (attacker_hit_try > defender_dodge_try):
@@ -560,7 +596,7 @@ class GameNPC(GameObject):
         #Deal the damage and report
         if hit_enemy:
             self.hp -= damage_enemy
-            message(interlocutor.name + " hit " + self.name + " for " + str(damage_enemy) + "hit points.", libtcod.green)
+            message(interlocutor.name + " hit " + self.name + " for " + str(damage_enemy) + " hit points.", libtcod.green)
         else:
             message(interlocutor.name + " missed " + self.name + ".", color_ui_text)
 
@@ -595,8 +631,8 @@ class Player(GameObject):
         self.fuel_per_jump = 10
         self.charge = -1
         self.max_charge = 5
-        self.attack = 1
-        self.defense = 1
+        self.attack = 2
+        self.defense = 2
         self.heal = 0
         self.dead = False
 
@@ -622,7 +658,7 @@ class Player(GameObject):
         #Deal the damage and report
         if hit_enemy:
             self.hp -= damage_enemy
-            message(interlocutor.name + " hit " + self.name + " for " + str(damage_enemy) + "hit points.", libtcod.green)
+            message(interlocutor.name + " hit " + self.name + " for " + str(damage_enemy) + " hit points.", libtcod.green)
         else:
             message(interlocutor.name + " missed " + self.name + ".", color_ui_text)
 
@@ -630,9 +666,15 @@ class Player(GameObject):
         #We should check collisions here, for objects
         if self.charge < self.max_charge:
             self.charge += 1
-        if self.hp <= 0:
+        if self.hp <= 0 and self.dead == False:
             self.dead = True
-            message("YOU HAVE DIED. ALL HOPE FOR HUMANITY IS LOST.", libtcod.lighter_red)
+            message("#############################################", libtcod.red)
+            message("#############################################", libtcod.red)
+            message("#############################################", libtcod.red)
+            message("YOU HAVE DIED, ALL HOPE FOR HUMANITY IS LOST.", libtcod.lighter_red)
+            message("#############################################", libtcod.red)
+            for i in range(CCON_HEIGHT - 6):
+                message("#############################################", libtcod.red)
 
 class Tile:
     """A map tile. The map is made up of a lot of these."""
@@ -732,9 +774,16 @@ class UIPanel(object):
 def handle_keys():
     """Block until the player presses a key, and then handle that key."""
     global recompute_fov, game_state, world
-    if world.player.dead and not (game_state == "menu" or game_state == "cutscene"):
-        game_state == "dead"
     key = libtcod.console_wait_for_keypress(True) #By waiting for keypress, we have a "turn-based" game
+    if world.player.dead == True and not (game_state == "menu" or game_state == "cutscene"):
+        game_state = "dead"
+
+    if game_state == "dead":
+        if key.vk == libtcod.KEY_ESCAPE:
+            return "exit"
+        else:
+        	return "didn't take turn"
+
     if game_state == "playing":
         #Handle movement for the player
         if key.vk == libtcod.KEY_UP:
@@ -773,11 +822,8 @@ def handle_keys():
         elif key.vk == libtcod.KEY_SPACE:
             debug(world.player.describe())
             return "didn't take turn"
-    if game_state == "dead":
-        if key.vk == libtcod.KEY_ESCAPE:
-            return "exit"
-        else: 
-        	return "didn't take turn"
+        else:
+            return "didn't take turn"
 
 
 def render_user_interface():
@@ -912,7 +958,7 @@ while not libtcod.console_is_window_closed():
     #Initial time
     time_main_loop_start = int(round(time.time() * 1000)) #Time in millis
     #Perform AI
-    if game_state == "playing" and status != "didn't_take_turn":
+    if game_state == "playing" and status != "didn't take turn":
         world.update()
     #Draw everything into the buffer
     world.draw(MCON)
