@@ -376,6 +376,8 @@ class World:
                         libtcod.console_put_char_ex(console, x, y, '#', color_light_wall, color_light_bg)
                     else:
                         libtcod.console_put_char_ex(console, x, y, '.', color_light_wall, color_light_bg)
+                    #Now, no matter what, mark the tile explored.
+                    self.Map[x][y].explored = True
         #Draw objects and the player
         for object in self.Objects:
             object.draw(console)
@@ -518,19 +520,23 @@ class GameNPC(GameObject):
         self.blocks = True
         self.passive_target_x = 0
         self.passive_target_y = 0
+	self.dead = False
 
     def update(self, world):
         super(GameNPC, self).update(world)
-        if self.hp <= 0:
+        if self.hp <= 0 or self.dead is True:
             message(self.name + " died!")
             #Now give the player a buff for killing the enemy, maybe.
             if libtcod.random_get_int(0, 0, 100) < DROP_BUFF_CHANCE:
                 if libtcod.random_get_int(0,0,100) < DROP_ATK_CHANCE:
                     self.world.player.attack += 1
                     message("You feel stronger.", color_ui_charge)
+                if libtcod.random_get_int(0,0,100) < DROP_MHP_CHANCE:
+                    self.world.player.max_hp += 1
+                    message("You feel sturdier.", color_ui_charge)
                 if libtcod.random_get_int(0,0,100) < DROP_DEF_CHANCE:
                     self.world.player.defense += 1
-                    message("You feel sturdier.", color_ui_charge)
+                    message("You feel less vulnerable.", color_ui_charge)
                 if libtcod.random_get_int(0,0,100) < DROP_HEAL_CHANCE:
                     self.world.player.hp = self.world.player.max_hp
                     message("You feel completely rejuvinated.", color_ui_charge)
@@ -540,6 +546,7 @@ class GameNPC(GameObject):
 
             #Now remove us from whatever world we're in
             self.world.despawn_object(self)
+	    return
         if (self.x == player.x and self.y == player.y):
             player.interact(self)
         if self.ai_type == "passive":
@@ -579,6 +586,11 @@ class GameNPC(GameObject):
                 self.move(0,0, world)
 
     def interact(self, interlocutor):
+	if self.dead is True:
+		return
+	if self.hp <= 0:
+		self.dead = True
+		return
         if interlocutor.name != "You":
             return #We're not interacting with the player for some reason. This is not good.
         #See if we hit the enemy
@@ -839,7 +851,7 @@ def render_user_interface():
     uipanel.add_text(uipanel.margin, current_ui_y, "D O W N", color_zero)
     current_ui_y += uipanel.vmargin
     #Health
-    uipanel.add_bar(uipanel.margin, current_ui_y, "Hull", world.player.hp, world.player.max_hp, color_ui_health, color_zero)
+    uipanel.add_bar(uipanel.margin, current_ui_y, "HP", world.player.hp, world.player.max_hp, color_ui_health, color_zero)
     current_ui_y += uipanel.vmargin
     #Fuel
     uipanel.add_bar(uipanel.margin, current_ui_y, "Fuel", world.player.fuel, world.player.max_fuel, color_ui_fuel, color_zero)
